@@ -14,7 +14,7 @@ categories: Android
 ```
 ### 架构图
 再看一眼整体架构图
-![图片](https://imgchr.com/i/KcUoKH)
+![图片](https://s2.ax1x.com/2019/10/28/KcUoKH.png)
 我们也从这三个方面来分析
 ### with()方法
 首先with()方法的参数是什么？
