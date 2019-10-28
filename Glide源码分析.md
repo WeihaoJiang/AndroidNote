@@ -830,7 +830,20 @@ private Resource<T> loadFromCache(Key key) throws IOException {
 ```
 这个方法的逻辑非常简单，调用getDiskCache()方法获取到的就是Glide自己编写的DiskLruCache工具类的实例，然后调用它的get()方法并把缓存Key传入，就能得到硬盘缓存的文件了。如果文件为空就返回null，如果文件不为空则将它解码成Resource对象后返回即可。
 
+### 看源码之前不清楚的两个问题：
 
+- 1 Glide的方法能在子线程中使用吗？
+> Glide的with()方法和load()方法是可以的，其中with()传入的context，若在非主线程，那么不管你是传入的Activity还是Fragment，都会被强制当成Application来处理，可能造成内存泄漏；而into()无法在主线程中使用，会抛出异常“You must call this method on the main thread”
+
+- 2 如何处理一个大图的缓存？
+```java
+BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;//只读取图片，不加载到内存中
+        BitmapFactory.decodeFile(file, options);
+        options.inSampleSize=computeSampleSize(options, -1, 512*512);//返回合适的inSampleSize值,inSampleSize是缩放参数，必须被二整除
+        options.inJustDecodeBounds = false;//加载到内存中
+        bitmap = BitmapFactory.decodeFile(file, options);
+```
 
 
 
