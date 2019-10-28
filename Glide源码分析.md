@@ -12,6 +12,9 @@ categories: Android
 ```
   Glide.with(this).load(url).into(imageView);
 ```
+### 架构图
+再看一眼整体架构图
+![图片](https://imgchr.com/i/KcUoKH)
 我们也从这三个方面来分析
 ### with()方法
 首先with()方法的参数是什么？
@@ -69,7 +72,7 @@ public RequestManager get(@NonNull FragmentActivity activity) {
 - 2 传非Application，传入非Application参数的情况。不管在Glide.with()方法中传入的是Activity、FragmentActivity、v4包下的Fragment、还是app包下的Fragment，最终的流程都是一样的，那就是会向当前的Activity当中添加一个隐藏的Fragment。因为Glide需要知道加载的生命周期。很简单的一个道理，如果你在某个Activity上正在加载着一张图片，结果图片还没加载出来，Activity就被用户关掉了，那么图片还应该继续加载吗？当然不应该。可是Glide并没有办法知道Activity的生命周期，于是Glide就使用了添加隐藏Fragment的这种小技巧，因为Fragment的生命周期和Activity是同步的，如果Activity被销毁了，Fragment是可以监听到的，这样Glide就可以捕获这个事件并停止图片加载了。
 
 那么
-###如何绑定生命周期
+#### 如何绑定生命周期
 继续接着上面的代码看supportFragmentGet
 ```java
  RequestManager supportFragmentGet(Context context, FragmentManager fm) {
@@ -84,7 +87,7 @@ public RequestManager get(@NonNull FragmentActivity activity) {
 ```
 在fragment 中创建RequestManager，并且传入getLifecycle()，通过Lifecycle实现生命周期的绑定
 
-##load()方法
+### load()方法
 `Glide.with`获得RequestManager之后，执行load方法设置图片源。图片源可以是：图片数据字节数组、File文件，网络图片地址等。以`load(String)`为例：
 
 ```java
@@ -118,7 +121,7 @@ private RequestBuilder<TranscodeType> loadGeneric(@Nullable Object model) {
 
 RequestBuilder是请求构建者，用户可以使用它设置如：单独的缓存策略、加载成功前占位图、加载失败后显示图片等等加载图片的各种配置。当RequestBuilder 构建完成之后，接下来就等待执行这个请求。
 
-##into()方法
+### into()方法
 
 `Glide.with`获得RequestManager之后，执行load方法设置图片源。图片源可以是：图片数据字节数组、File文件，网络图片地址等。以`load(String)`为例：
 
@@ -153,7 +156,7 @@ private RequestBuilder<TranscodeType> loadGeneric(@Nullable Object model) {
 
 RequestBuilder是请求构建者，用户可以使用它设置如：单独的缓存策略、加载成功前占位图、加载失败后显示图片等等加载图片的各种配置。当RequestBuilder 构建完成之后，接下来就等待执行这个请求。
 
-## RequestBuilder.into
+#### RequestBuilder.into
 
 使用Glide最简单的方式加载图片最后一个阶段就是执行into方法。从into方法为入口开始执行图片加载，逻辑也开始复杂起来。
 
@@ -204,134 +207,127 @@ RequestBuilder是请求构建者，用户可以使用它设置如：单独的缓
 一般来说，我们在执行into时传入一个ImageView用于显示。在这个into方法中，先确定本次加载的BaseRequestOptions，然后执行重载的另一个into方法。其中BaseRequestOptions就是上面我们提到的RequestBuilder可以设置图片加载的各种配置，这些配置选项就被封装在BaseRequestOptions中(RequestBuilder extends BaseRequestOptions)。而重载的into方法实现为:
 
 ```java
-//RequestBuilder
+//GenericRequestBuilder
 
-private <Y extends Target<TranscodeType>> Y into(
-      @NonNull Y target,
-      @Nullable RequestListener<TranscodeType> targetListener,
-      BaseRequestOptions<?> options,
-      Executor callbackExecutor) {
-    Preconditions.checkNotNull(target);
-    if (!isModelSet) {
-      throw new IllegalArgumentException("You must call #load() before calling #into()");
+ public <Y extends Target<TranscodeType>> Y into(Y target) {
+        Util.assertMainThread();
+        if (target == null) {
+            throw new IllegalArgumentException("You must pass in a non null Target");
+        }
+        if (!isModelSet) {
+            throw new IllegalArgumentException("You must first set a model (try #load())");
+        }
+
+        Request previous = target.getRequest();
+
+        if (previous != null) {
+            previous.clear();
+            requestTracker.removeRequest(previous);
+            previous.recycle();
+        }
+
+        Request request = buildRequest(target);
+        target.setRequest(request);
+        lifecycle.addListener(target);
+        requestTracker.runRequest(request);
+
+        return target;
     }
-
-    Request request = buildRequest(target, targetListener, options, callbackExecutor);
-
-    Request previous = target.getRequest();
-    if (request.isEquivalentTo(previous)
-        && !isSkipMemoryCacheWithCompletePreviousRequest(options, previous)) {
-      // If the request is completed, beginning again will ensure the result is re-delivered,
-      // triggering RequestListeners and Targets. If the request is failed, beginning again will
-      // restart the request, giving it another chance to complete. If the request is already
-      // running, we can let it continue running without interruption.
-      if (!Preconditions.checkNotNull(previous).isRunning()) {
-        // Use the previous request rather than the new one to allow for optimizations like skipping
-        // setting placeholders, tracking and un-tracking Targets, and obtaining View dimensions
-        // that are done in the individual Request.
-        previous.begin();
-      }
-      return target;
-    }
-
-    requestManager.clear(target);
-    target.setRequest(request);
-    requestManager.track(target, request);
-
-    return target;
-  }
 ```
 
 这个into方法中首先调用 buildRequest 构建了一个请求Request，然后把Request交给RequestManager跟踪(生命周期)并启动请求。
-
-## RequestTracker
-
-```java
-// RequestManager
-private final RequestTracker requestTracker;
-public RequestManager(
-      @NonNull Glide glide,
-      @NonNull Lifecycle lifecycle,
-      @NonNull RequestManagerTreeNode treeNode,
-      @NonNull Context context) {
-    //关注点为 requestTracker,最终源码转化为:
-    this.requestTracker = new RequestTracker();
-}
-
-synchronized void track(@NonNull Target<?> target, @NonNull Request request) {
-    targetTracker.track(target);
-    requestTracker.runRequest(request);
-}
-
-```
-
-创建出来的Request交给`RequestTracker.runRequest`管理并启动加载请求。
+跟进requestTracker.runRequest()；
 
 ```java
-private final Set<Request> requests =
-      Collections.newSetFromMap(new WeakHashMap<Request, Boolean>());
-
-private final List<Request> pendingRequests = new ArrayList<>();
-
-public void runRequest(@NonNull Request request) {
-    requests.add(request);
-    if (!isPaused) {
-      request.begin();
-    } else {
-      request.clear();
-      if (Log.isLoggable(TAG, Log.VERBOSE)) {
-        Log.v(TAG, "Paused, delaying request");
-      }
-      pendingRequests.add(request);
+  /**
+     * Starts tracking the given request.
+     */
+    public void runRequest(Request request) {
+        requests.add(request);
+        if (!isPaused) {
+            request.begin();
+        } else {
+            pendingRequests.add(request);
+        }
     }
-}
 ```
-
-如果requestManager处于暂停状态`Glide.with().pauseReuqests()`，即调用`RequestManager.pauseRequests`，这时候新加入的Request全部不会执行只会加入一个weakHashMap集合。为了防止在恢复执行resumeRequest的时候 request只存在弱引用而被回收，使用一个强引用集合保存没有执行的Reqeust。
-
-> 除了主动暂停，RequestManager还可能因为生命周期执行onStop而暂停，当然关于生命周期的控制会单独写一篇分析文章，这里我们只关注一条主线：图片是如何被加载的。
-
-
-
-## SigleRequest
-
-`request.begin`表示开始执行加载任务。Request是一个接口，构建Request的代码非常多(`RequestBuilder.into->RequestBuilder.buildRequest`)，但是大部分都是处理配置了缩略图的情况。一般情况来说，最终的Request是其实现类：**SingleRequest**。
-
+先判断Glide当前是不是处理暂停状态，如果不是暂停状态就调用Request的begin()方法来执行Request，否则的话就先将Request添加到待执行队列里面，等暂停状态解除了之后再执行。
+跟进request.begin();
 ```java
-// SingleRequest
-public void begin() {
-    synchronized (requestLock) {
-      //1、模型(图片数据源)为null，使用失败占位图
-      if (model == null) {
-        onLoadFailed(new GlideException("Received null model"), logLevel);
-        return;
-      }
-	  //2、正在加载，抛出重复加载异常
-      if (status == Status.RUNNING) {
-        throw new IllegalArgumentException("Cannot restart a running request");
-      }
-	 //3、已经加载完成，直接设置显示
-      if (status == Status.COMPLETE) {
-        onResourceReady(resource, DataSource.MEMORY_CACHE);
-        return;
-      }
-	 //4、需要去执行加载图片
-      status = Status.WAITING_FOR_SIZE;
-      if (Util.isValidDimensions(overrideWidth, overrideHeight)) {
-        onSizeReady(overrideWidth, overrideHeight);
-      } else {
-        target.getSize(this);
-      }
-	  //5、设置开始加载占位图
-      if ((status == Status.RUNNING || status == Status.WAITING_FOR_SIZE)
-          && canNotifyStatusChanged()) {
-        target.onLoadStarted(getPlaceholderDrawable());
-      }
-    }
-}
-```
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void begin() {
+        startTime = LogTime.getLogTime();
+        if (model == null) {
+            onException(null);
+            return;
+        }
 
-上面的代码主要是判断当前Request的各种状态并且设置占位图，而启动加载是在第四步开始的。当用户设置了图片的宽高时执行`onSizeReady`启动加载，而如果未设置则会执行`target.getSize(this)`计算目标View(需要显示的ImageView)的大小，在计算完之后，它也会调用onSizeReady()方法。也就是说，不管是哪种情况，最终都会调用到onSizeReady()方法。
+        status = Status.WAITING_FOR_SIZE;
+        if (Util.isValidDimensions(overrideWidth, overrideHeight)) {
+            onSizeReady(overrideWidth, overrideHeight);
+        } else {
+            target.getSize(this);
+        }
+
+        if (!isComplete() && !isFailed() && canNotifyStatusChanged()) {
+            target.onLoadStarted(getPlaceholderDrawable());
+        }
+        if (Log.isLoggable(TAG, Log.VERBOSE)) {
+            logV("finished run method in " + LogTime.getElapsedMillis(startTime));
+        }
+    }
+```
+跟进onException(null);
+```java
+    @Override
+    public void onException(Exception e) {
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(TAG, "load failed", e);
+        }
+
+        status = Status.FAILED;
+        //TODO: what if this is a thumbnail request?
+        if (requestListener == null || !requestListener.onException(e, model, target, isFirstReadyResource())) {
+            setErrorPlaceholder(e);
+        }
+    }
+```
+再跟setErrorPlaceholder(e);
+```java
+  @Override
+    public void onException(Exception e) {
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(TAG, "load failed", e);
+        }
+
+        status = Status.FAILED;
+        //TODO: what if this is a thumbnail request?
+        if (requestListener == null || !requestListener.onException(e, model, target, isFirstReadyResource())) {
+            setErrorPlaceholder(e);
+        }
+    }
+
+     private void setErrorPlaceholder(Exception e) {
+        if (!canNotifyStatusChanged()) {
+            return;
+        }
+
+        Drawable error = model == null ? getFallbackDrawable() : null;
+        if (error == null) {
+          error = getErrorDrawable();
+        }
+        if (error == null) {
+            error = getPlaceholderDrawable();
+        }
+        target.onLoadFailed(e, error);
+    }
+    ```
+其实就是将这张error占位图显示到ImageView上而已，因为现在出现了异常，没办法展示正常的图片了。而如果你仔细看下刚才begin()方法的第15行，你会发现它又调用了一个target.onLoadStarted()方法，并传入了一个loading占位图，在也就说，在图片请求开始之前，会先使用这张占位图代替最终的图片显示。
+
+回到begin()，主要是判断当前Request的各种状态并且设置占位图，而启动加载是在第四步开始的。当用户设置了图片的宽高时执行`onSizeReady`启动加载，而如果未设置则会执行`target.getSize(this)`计算目标View(需要显示的ImageView)的大小，在计算完之后，它也会调用onSizeReady()方法。也就是说，不管是哪种情况，最终都会调用到onSizeReady()方法。
 
 ```java
 public void onSizeReady(int width, int height) {
@@ -361,20 +357,16 @@ public void onSizeReady(int width, int height) {
       //.....
     }
 }
+
 ```
 
-在onSizeReady中使用**Engine**正式开始加载图片。
+在onSizeReady将获得一系列的值一起传入到了Engine的load()方法当中开始加载图片。
 
-
-
-## Engine
-
-**Engine**类顾名思义:引擎，是Glide加载的发动机。
+**Engine**类顾名思义:引擎，是Glide加载的发动机，跟进Engine的load()
 
 ```java
-// Engine
-public <R> LoadStatus load(...) {
-   
+ public <R> LoadStatus load(...) {
+   ...
     //1、根据参数（模型、宽、高等）构建加载的标识key
     EngineKey key =
         keyFactory.buildKey(
@@ -387,57 +379,33 @@ public <R> LoadStatus load(...) {
             transcodeClass,
             options);
 
-    EngineResource<?> memoryResource;
-    synchronized (this) {
-      //2、从内存缓存中查找key对应的图片资源（所以一张图片不同的宽高可能存在多个缓存）
-      memoryResource = loadFromMemory(key, isMemoryCacheable, startTime);
-	 //3、缓存未命中，开启加载任务线程
-      if (memoryResource == null) {
-        return waitForExistingOrStartNewJob(
-            glideContext,
-            model,
-            signature,
-            width,
-            height,
-            resourceClass,
-            transcodeClass,
-            priority,
-            diskCacheStrategy,
-            transformations,
-            isTransformationRequired,
-            isScaleOnlyOrNoTransform,
-            options,
-            isMemoryCacheable,
-            useUnlimitedSourceExecutorPool,
-            useAnimationPool,
-            onlyRetrieveFromCache,
-            cb,
-            callbackExecutor,
-            key,
-            startTime);
+    EngineResource<?> active = loadFromActiveResources(key, isMemoryCacheable);
+    if (active != null) {
+      cb.onResourceReady(active, DataSource.MEMORY_CACHE);
+      if (VERBOSE_IS_LOGGABLE) {
+        logWithTimeAndKey("Loaded resource from active resources", startTime, key);
       }
+      return null;
     }
-    //4、通过回调通知图片加载完成
-    cb.onResourceReady(memoryResource, DataSource.MEMORY_CACHE);
-    return null;
-}
-```
 
-load方法中其实就是干了一件事情，从内存缓存找图片，没找到就开线程去检查磁盘缓存或者去图片源加载。关于Glide的缓存我们在另一篇文章章讨论。先来看无内存缓存时执行的`waitForExistingOrStartNewJob`。
+    EngineResource<?> cached = loadFromCache(key, isMemoryCacheable);
+    if (cached != null) {
+      cb.onResourceReady(cached, DataSource.MEMORY_CACHE);
+      if (VERBOSE_IS_LOGGABLE) {
+        logWithTimeAndKey("Loaded resource from cache", startTime, key);
+      }
+      return null;
+    }
 
-```java
-private final Jobs jobs;
-
-//Engine
-private <R> LoadStatus waitForExistingOrStartNewJob(...) {
-	//1、jobs其实就是一个map集合，记录了所有正在执行加载的任务
     EngineJob<?> current = jobs.get(key, onlyRetrieveFromCache);
     if (current != null) {
-      //如果同样的图片加载任务正在执行加载，那么本次只需要添加一个监听即可
       current.addCallback(cb, callbackExecutor);
+      if (VERBOSE_IS_LOGGABLE) {
+        logWithTimeAndKey("Added to existing load", startTime, key);
+      }
       return new LoadStatus(cb, current);
     }
-	//2、创建新的job并执行加载
+//2、创建新的job并执行加载
     EngineJob<R> engineJob =
         engineJobFactory.build(
             key,
@@ -445,7 +413,7 @@ private <R> LoadStatus waitForExistingOrStartNewJob(...) {
             useUnlimitedSourceExecutorPool,
             useAnimationPool,
             onlyRetrieveFromCache);
-    // DecodeJob就是一个Runnable,EngineJob包含的线程池启动线程并能够接收线程中执行过程的回调
+ // DecodeJob就是一个Runnable,EngineJob包含的线程池启动线程并能够接收线程中执行过程的回调
     DecodeJob<R> decodeJob =
         decodeJobFactory.build(
             glideContext,
@@ -470,16 +438,15 @@ private <R> LoadStatus waitForExistingOrStartNewJob(...) {
     engineJob.addCallback(cb, callbackExecutor);
     // 启动线程
     engineJob.start(decodeJob);
-
+    if (VERBOSE_IS_LOGGABLE) {
+      logWithTimeAndKey("Started new load", startTime, key);
+    }
     return new LoadStatus(cb, engineJob);
 }
 ```
 
 如果引擎中没有同样的正在加载的请求，此处会创建一个实现了Runable接口的DecodeJob并执行。
-
-
-
-## DecodeJob
+跟进engineJob.start(decodeJob);
 
 ```java
 //EngineJob 
@@ -622,10 +589,10 @@ DecodeJob 任务执行时, 它根据不同的场景, 获取不同的场景执行
 
 总的来说，Glide在加载图片的时候，会首先从内存缓存获取，如果内存缓存不存在，则会在磁盘缓存中查找，否则从源地址进行加载。
 
-##Glide缓存
+## Glide缓存
 简单来说分为 活动缓存（弱引用activeResources），内存缓存（LruResourceCache），资源缓存，数据缓存
 
-###活动缓存和内存缓存
+### 活动缓存和内存缓存
 默认情况下，Glide自动就是开启内存缓存的。也就是说，当我们使用Glide加载了一张图片之后，这张图片就会被缓存到内存当中，只要在它还没从内存中被清除之前，下次使用Glide再加载这张图片都会直接从内存当中读取，而不用重新从网络或硬盘上读取了，这样无疑就可以大幅度提升图片的加载效率。比方说你在一个RecyclerView当中反复上下滑动，RecyclerView中只要是Glide加载过的图片都可以直接从内存当中迅速读取并展示出来，从而大大提升了用户体验。不过可以通过这种方式禁掉默认缓存：
 ```
 Glide.with(this)
@@ -768,7 +735,7 @@ public class Engine implements EngineJobListener,
 
 概括一下来说，就是如果能从内存缓存当中读取到要加载的图片，那么就直接进行回调，如果读取不到的话，才会开启线程执行后面的图片加载逻辑。
 
-###资源缓存，数据缓存
+### 资源缓存，数据缓存
 用法上，它也是可禁的
 ```
 Glide.with(this)
@@ -863,7 +830,6 @@ private Resource<T> loadFromCache(Key key) throws IOException {
 ```
 这个方法的逻辑非常简单，调用getDiskCache()方法获取到的就是Glide自己编写的DiskLruCache工具类的实例，然后调用它的get()方法并把缓存Key传入，就能得到硬盘缓存的文件了。如果文件为空就返回null，如果文件不为空则将它解码成Resource对象后返回即可。
 
-![图片]()
 
 
 
