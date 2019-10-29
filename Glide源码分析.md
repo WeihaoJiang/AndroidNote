@@ -156,8 +156,6 @@ private RequestBuilder<TranscodeType> loadGeneric(@Nullable Object model) {
 
 RequestBuilder是请求构建者，用户可以使用它设置如：单独的缓存策略、加载成功前占位图、加载失败后显示图片等等加载图片的各种配置。当RequestBuilder 构建完成之后，接下来就等待执行这个请求。
 
-#### RequestBuilder.into
-
 使用Glide最简单的方式加载图片最后一个阶段就是执行into方法。从into方法为入口开始执行图片加载，逻辑也开始复杂起来。
 
 ```java
@@ -830,7 +828,7 @@ private Resource<T> loadFromCache(Key key) throws IOException {
 ```
 这个方法的逻辑非常简单，调用getDiskCache()方法获取到的就是Glide自己编写的DiskLruCache工具类的实例，然后调用它的get()方法并把缓存Key传入，就能得到硬盘缓存的文件了。如果文件为空就返回null，如果文件不为空则将它解码成Resource对象后返回即可。
 
-### 看源码之前不清楚的两个问题：
+## 看源码之前不清楚的两个问题：
 
 - 1 Glide的方法能在子线程中使用吗？
 > Glide的with()方法和load()方法是可以的，其中with()传入的context，若在非主线程，那么不管你是传入的Activity还是Fragment，都会被强制当成Application来处理，可能造成内存泄漏；而into()无法在主线程中使用，会抛出异常“You must call this method on the main thread”
